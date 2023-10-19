@@ -1,6 +1,6 @@
 use crate::{
     bundle_state::BundleStateWithReceipts,
-    traits::{BlockSource, ReceiptProvider},
+    traits::{BlockSource, LogHistoryReader, ReceiptProvider},
     AccountReader, BlockHashReader, BlockIdReader, BlockNumReader, BlockReader, BlockReaderIdExt,
     ChainSpecProvider, ChangeSetReader, EvmEnvProvider, HeaderProvider, PruneCheckpointReader,
     ReceiptProviderIdExt, StageCheckpointReader, StateProvider, StateProviderBox,
@@ -12,7 +12,7 @@ use reth_primitives::{
     stage::{StageCheckpoint, StageId},
     trie::AccountProof,
     Account, Address, Block, BlockHash, BlockHashOrNumber, BlockId, BlockNumber, Bytecode,
-    ChainInfo, ChainSpec, Header, PruneCheckpoint, PruneSegment, Receipt, SealedBlock,
+    ChainInfo, ChainSpec, Header, IntegerList, PruneCheckpoint, PruneSegment, Receipt, SealedBlock,
     SealedHeader, StorageKey, StorageValue, TransactionMeta, TransactionSigned,
     TransactionSignedNoHash, TxHash, TxNumber, B256, MAINNET, U256,
 };
@@ -211,6 +211,24 @@ impl ReceiptProvider for NoopProvider {
 }
 
 impl ReceiptProviderIdExt for NoopProvider {}
+
+impl LogHistoryReader for NoopProvider {
+    fn log_address_index(
+        &self,
+        _address: Address,
+        _block_range: RangeInclusive<BlockNumber>,
+    ) -> RethResult<Option<IntegerList>> {
+        Ok(None)
+    }
+
+    fn log_topic_index(
+        &self,
+        _topic: B256,
+        _block_range: RangeInclusive<BlockNumber>,
+    ) -> RethResult<Option<IntegerList>> {
+        Ok(None)
+    }
+}
 
 impl HeaderProvider for NoopProvider {
     fn header(&self, _block_hash: &BlockHash) -> RethResult<Option<Header>> {

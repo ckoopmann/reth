@@ -16,7 +16,7 @@ use futures::TryFutureExt;
 use reth_network_api::{NetworkInfo, Peers};
 use reth_provider::{
     AccountReader, BlockReaderIdExt, CanonStateSubscriptions, ChainSpecProvider, ChangeSetReader,
-    EvmEnvProvider, HeaderProvider, StateProviderFactory,
+    EvmEnvProvider, HeaderProvider, LogHistoryReader, StateProviderFactory,
 };
 use reth_rpc::{
     eth::{
@@ -255,6 +255,7 @@ impl RpcServerArgs {
             + EvmEnvProvider
             + ChainSpecProvider
             + ChangeSetReader
+            + LogHistoryReader
             + Clone
             + Unpin
             + 'static,
@@ -291,6 +292,7 @@ impl RpcServerArgs {
             + EvmEnvProvider
             + HeaderProvider
             + StateProviderFactory
+            + LogHistoryReader
             + Clone
             + Unpin
             + 'static,

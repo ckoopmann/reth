@@ -110,7 +110,7 @@ use reth_ipc::server::IpcServer;
 use reth_network_api::{NetworkInfo, Peers};
 use reth_provider::{
     AccountReader, BlockReader, BlockReaderIdExt, CanonStateSubscriptions, ChainSpecProvider,
-    ChangeSetReader, EvmEnvProvider, StateProviderFactory,
+    ChangeSetReader, EvmEnvProvider, LogHistoryReader, StateProviderFactory,
 };
 use reth_rpc::{
     eth::{
@@ -178,6 +178,7 @@ where
         + EvmEnvProvider
         + ChainSpecProvider
         + ChangeSetReader
+        + LogHistoryReader
         + Clone
         + Unpin
         + 'static,
@@ -324,6 +325,7 @@ where
         + EvmEnvProvider
         + ChainSpecProvider
         + ChangeSetReader
+        + LogHistoryReader
         + Clone
         + Unpin
         + 'static,
@@ -573,6 +575,7 @@ impl RpcModuleSelection {
             + EvmEnvProvider
             + ChainSpecProvider
             + ChangeSetReader
+            + LogHistoryReader
             + Clone
             + Unpin
             + 'static,
@@ -825,6 +828,7 @@ where
         + EvmEnvProvider
         + ChainSpecProvider
         + ChangeSetReader
+        + LogHistoryReader
         + Clone
         + Unpin
         + 'static,

@@ -1,10 +1,10 @@
 use crate::{
-    AccountReader, BlockHashReader, BlockIdReader, BlockNumReader, BlockReader, BlockReaderIdExt,
-    BlockchainTreePendingStateProvider, BundleStateDataProvider, CanonChainTracker,
-    CanonStateNotifications, CanonStateSubscriptions, ChainSpecProvider, ChangeSetReader,
-    EvmEnvProvider, HeaderProvider, ProviderError, PruneCheckpointReader, ReceiptProvider,
-    ReceiptProviderIdExt, StageCheckpointReader, StateProviderBox, StateProviderFactory,
-    TransactionsProvider, WithdrawalsProvider,
+    traits::LogHistoryReader, AccountReader, BlockHashReader, BlockIdReader, BlockNumReader,
+    BlockReader, BlockReaderIdExt, BlockchainTreePendingStateProvider, BundleStateDataProvider,
+    CanonChainTracker, CanonStateNotifications, CanonStateSubscriptions, ChainSpecProvider,
+    ChangeSetReader, EvmEnvProvider, HeaderProvider, ProviderError, PruneCheckpointReader,
+    ReceiptProvider, ReceiptProviderIdExt, StageCheckpointReader, StateProviderBox,
+    StateProviderFactory, TransactionsProvider, WithdrawalsProvider,
 };
 use reth_db::{database::Database, models::StoredBlockBodyIndices};
 use reth_interfaces::{
@@ -15,7 +15,7 @@ use reth_interfaces::{
 use reth_primitives::{
     stage::{StageCheckpoint, StageId},
     Account, Address, Block, BlockHash, BlockHashOrNumber, BlockId, BlockNumHash, BlockNumber,
-    BlockNumberOrTag, BlockWithSenders, ChainInfo, ChainSpec, Header, PruneCheckpoint,
+    BlockNumberOrTag, BlockWithSenders, ChainInfo, ChainSpec, Header, IntegerList, PruneCheckpoint,
     PruneSegment, Receipt, SealedBlock, SealedBlockWithSenders, SealedHeader, TransactionMeta,
     TransactionSigned, TransactionSignedNoHash, TxHash, TxNumber, Withdrawal, B256, U256,
 };
@@ -382,6 +382,28 @@ where
                 }
             },
         }
+    }
+}
+
+impl<DB, Tree> LogHistoryReader for BlockchainProvider<DB, Tree>
+where
+    DB: Database,
+    Tree: Send + Sync,
+{
+    fn log_address_index(
+        &self,
+        address: Address,
+        block_range: RangeInclusive<BlockNumber>,
+    ) -> RethResult<Option<IntegerList>> {
+        self.database.provider()?.log_address_index(address, block_range)
+    }
+
+    fn log_topic_index(
+        &self,
+        topic: B256,
+        block_range: RangeInclusive<BlockNumber>,
+    ) -> RethResult<Option<IntegerList>> {
+        self.database.provider()?.log_topic_index(topic, block_range)
     }
 }
 
