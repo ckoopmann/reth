@@ -7,7 +7,7 @@ use crate::{
         logs_utils,
     },
     result::{rpc_error_with_code, ToRpcResult},
-    EthSubscriptionIdProvider,
+    BlockingTaskPool, EthSubscriptionIdProvider,
 };
 use alloy_primitives::{Address, BlockNumber, B256};
 use async_trait::async_trait;
@@ -19,7 +19,6 @@ use reth_rpc_api::EthFilterApiServer;
 use reth_rpc_types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, FilteredParams, Log, ValueOrArray,
 };
-use reth_tasks::TaskSpawner;
 use reth_transaction_pool::TransactionPool;
 use std::{collections::HashMap, ops::RangeInclusive, sync::Arc, time::Instant};
 use tokio::sync::{mpsc::Receiver, Mutex};
@@ -43,7 +42,7 @@ impl<Provider, Pool> EthFilter<Provider, Pool> {
         pool: Pool,
         eth_cache: EthStateCache,
         max_logs_per_response: usize,
-        task_spawner: Box<dyn TaskSpawner>,
+        blocking_task_pool: BlockingTaskPool,
     ) -> Self {
         let inner = EthFilterInner {
             provider,
@@ -52,7 +51,7 @@ impl<Provider, Pool> EthFilter<Provider, Pool> {
             id_provider: Arc::new(EthSubscriptionIdProvider::default()),
             max_logs_per_response,
             eth_cache,
-            task_spawner,
+            blocking_task_pool,
         };
         Self { inner: Arc::new(inner) }
     }
@@ -65,7 +64,7 @@ impl<Provider, Pool> EthFilter<Provider, Pool> {
 
 impl<Provider, Pool> EthFilter<Provider, Pool>
 where
-    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + 'static,
+    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + Clone + 'static,
     Pool: TransactionPool + 'static,
 {
     /// Returns all the filter changes for the given id, if any
@@ -133,7 +132,7 @@ where
 
                 let logs = self
                     .inner
-                    .get_logs_in_block_range(&filter, from_block_number, to_block_number)
+                    .get_logs_in_block_range(*filter, from_block_number, to_block_number)
                     .await?;
                 Ok(FilterChanges::Logs(logs))
             }
@@ -166,7 +165,7 @@ where
 #[async_trait]
 impl<Provider, Pool> EthFilterApiServer for EthFilter<Provider, Pool>
 where
-    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + 'static,
+    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + Clone + 'static,
     Pool: TransactionPool + 'static,
 {
     /// Handler for `eth_newFilter`
@@ -241,7 +240,7 @@ impl<Provider, Pool> Clone for EthFilter<Provider, Pool> {
 }
 
 /// Container type `EthFilter`
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct EthFilterInner<Provider, Pool> {
     /// The transaction pool.
     #[allow(unused)] // we need this for non standard full transactions eventually
@@ -256,14 +255,13 @@ struct EthFilterInner<Provider, Pool> {
     max_logs_per_response: usize,
     /// The async cache frontend for eth related data
     eth_cache: EthStateCache,
-    /// The type that can spawn tasks.
-    #[allow(unused)]
-    task_spawner: Box<dyn TaskSpawner>,
+    /// TODO:
+    blocking_task_pool: BlockingTaskPool,
 }
 
 impl<Provider, Pool> EthFilterInner<Provider, Pool>
 where
-    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + 'static,
+    Provider: BlockReader + BlockIdReader + EvmEnvProvider + LogHistoryReader + Clone + 'static,
     Pool: TransactionPool + 'static,
 {
     /// Returns logs matching given filter object.
@@ -302,7 +300,7 @@ where
                     .flatten();
                 let (from_block_number, to_block_number) =
                     logs_utils::get_filter_block_range(from, to, start_block, info);
-                self.get_logs_in_block_range(&filter, from_block_number, to_block_number).await
+                self.get_logs_in_block_range(filter, from_block_number, to_block_number).await
             }
         }
     }
@@ -343,67 +341,76 @@ where
     ///  - amount of matches exceeds configured limit
     async fn get_logs_in_block_range(
         &self,
-        filter: &Filter,
+        filter: Filter,
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Log>, FilterError> {
         trace!(target: "rpc::eth::filter", from=from_block, to=to_block, ?filter, "finding logs in range");
 
-        let mut all_logs = Vec::new();
-        let filter_params = FilteredParams::new(Some(filter.clone()));
+        let this = self.clone();
+        self.blocking_task_pool
+            .spawn(move || async move {
+                let mut all_logs = Vec::new();
+                let filter_params = FilteredParams::new(Some(filter.clone()));
 
-        // derive bloom filters from filter input
-        // let address_filter = FilteredParams::address_filter(&filter.address);
-        // let topics_filter = FilteredParams::topics_filter(&filter.topics);
+                // derive bloom filters from filter input
+                // let address_filter = FilteredParams::address_filter(&filter.address);
+                // let topics_filter = FilteredParams::topics_filter(&filter.topics);
 
-        // Create log index filter
-        let mut log_index_filter = LogIndexFilter::new(from_block..=to_block);
-        if let Some(filter_address) = filter.address.to_value_or_array() {
-            log_index_filter.install_address_filter(&self.provider, &filter_address)?;
-        }
-        let topics = filter
-            .topics
-            .clone()
-            .into_iter()
-            .filter_map(|t| t.to_value_or_array())
-            .collect::<Vec<_>>();
-        if !topics.is_empty() {
-            log_index_filter.install_topic_filter(&self.provider, &topics)?;
-        }
-
-        let is_multi_block_range = from_block != to_block;
-
-        // Since we know that there is at least one log per block, we can check whether the number
-        // of blocks exceeds the max logs response.
-        if let Some(Some(index)) = &log_index_filter.index {
-            if is_multi_block_range && index.len() > self.max_logs_per_response {
-                return Err(FilterError::QueryExceedsMaxResults(self.max_logs_per_response))
-            }
-        }
-
-        // TODO: simplify
-        // loop over the range of new blocks and check logs if the filter matches the log's bloom
-        for block_number in log_index_filter.iter() {
-            if let Some((block, receipts)) =
-                self.block_and_receipts_by_number(block_number.into()).await?
-            {
-                logs_utils::append_matching_block_logs(
-                    &mut all_logs,
-                    &filter_params,
-                    (block.number, block.hash).into(),
-                    block.body.into_iter().map(|tx| tx.hash()).zip(receipts),
-                    false,
-                );
-
-                // size check but only if range is multiple blocks, so we always return all
-                // logs of a single block
-                if is_multi_block_range && all_logs.len() > self.max_logs_per_response {
-                    return Err(FilterError::QueryExceedsMaxResults(self.max_logs_per_response))
+                // Create log index filter
+                let mut log_index_filter = LogIndexFilter::new(from_block..=to_block);
+                if let Some(filter_address) = filter.address.to_value_or_array() {
+                    log_index_filter.install_address_filter(&this.provider, &filter_address)?;
                 }
-            }
-        }
+                let topics = filter
+                    .topics
+                    .clone()
+                    .into_iter()
+                    .filter_map(|t| t.to_value_or_array())
+                    .collect::<Vec<_>>();
+                if !topics.is_empty() {
+                    log_index_filter.install_topic_filter(&this.provider, &topics)?;
+                }
 
-        Ok(all_logs)
+                let is_multi_block_range = from_block != to_block;
+
+                // Since we know that there is at least one log per block, we can check whether the
+                // number of blocks exceeds the max logs response.
+                if let Some(Some(index)) = &log_index_filter.index {
+                    if is_multi_block_range && index.len() > this.max_logs_per_response {
+                        return Err(FilterError::QueryExceedsMaxResults(this.max_logs_per_response))
+                    }
+                }
+
+                // loop over the range of new blocks and check logs if the filter matches the log's
+                // bloom
+                for block_number in log_index_filter.iter() {
+                    if let Some((block, receipts)) =
+                        this.block_and_receipts_by_number(block_number.into()).await?
+                    {
+                        logs_utils::append_matching_block_logs(
+                            &mut all_logs,
+                            &filter_params,
+                            (block.number, block.hash).into(),
+                            block.body.into_iter().map(|tx| tx.hash()).zip(receipts),
+                            false,
+                        );
+
+                        // size check but only if range is multiple blocks, so we always return all
+                        // logs of a single block
+                        if is_multi_block_range && all_logs.len() > this.max_logs_per_response {
+                            return Err(FilterError::QueryExceedsMaxResults(
+                                this.max_logs_per_response,
+                            ))
+                        }
+                    }
+                }
+
+                Ok(all_logs)
+            })
+            .await
+            .map_err(|_| FilterError::InternalError)?
+            .await
     }
 }
 

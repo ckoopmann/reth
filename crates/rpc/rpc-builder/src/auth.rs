@@ -59,6 +59,7 @@ where
     let eth_cache =
         EthStateCache::spawn_with(provider.clone(), Default::default(), executor.clone());
     let gas_oracle = GasPriceOracle::new(provider.clone(), Default::default(), eth_cache.clone());
+    let block_task_pool = BlockingTaskPool::build().expect("failed to build tracing pool");
     let eth_api = EthApi::with_spawner(
         provider.clone(),
         pool.clone(),
@@ -67,14 +68,14 @@ where
         gas_oracle,
         EthConfig::default().rpc_gas_cap,
         Box::new(executor.clone()),
-        BlockingTaskPool::build().expect("failed to build tracing pool"),
+        block_task_pool.clone(),
     );
     let eth_filter = EthFilter::new(
         provider,
         pool,
         eth_cache.clone(),
         DEFAULT_MAX_LOGS_PER_RESPONSE,
-        Box::new(executor.clone()),
+        block_task_pool,
     );
     launch_with_eth_api(eth_api, eth_filter, engine_api, socket_addr, secret).await
 }

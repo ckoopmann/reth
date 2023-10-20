@@ -1047,7 +1047,7 @@ where
                 self.pool.clone(),
                 cache.clone(),
                 self.config.eth.max_logs_per_response,
-                executor.clone(),
+                blocking_task_pool.clone(),
             );
 
             let pubsub = EthPubSub::with_spawner(
